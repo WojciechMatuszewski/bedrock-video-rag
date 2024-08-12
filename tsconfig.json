@@ -1,11 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
-    "lib": [
-      "es2020",
-      "dom"
-    ],
+    "target": "ES2022",
+    "module": "NodeNext",
+    "lib": ["ESNext"],
     "declaration": true,
     "strict": true,
     "noImplicitAny": true,
@@ -18,14 +15,11 @@
     "noFallthroughCasesInSwitch": false,
     "inlineSourceMap": true,
     "inlineSources": true,
+    "noEmit": true,
     "experimentalDecorators": true,
+    "allowImportingTsExtensions": true,
     "strictPropertyInitialization": false,
-    "typeRoots": [
-      "./node_modules/@types"
-    ]
+    "typeRoots": ["./node_modules/@types"]
   },
-  "exclude": [
-    "node_modules",
-    "cdk.out"
-  ]
+  "exclude": ["node_modules", "cdk.out"]
 }

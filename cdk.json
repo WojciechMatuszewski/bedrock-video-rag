@@ -1,5 +1,5 @@
 {
-  "app": "npx ts-node --prefer-ts-exts bin/bedrock-video-rag.ts",
+  "app": "tsx bin/bedrock-video-rag.ts",
   "watch": {
     "include": ["**"],
     "exclude": [
