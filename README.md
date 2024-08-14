@@ -10,4 +10,4 @@
 
     - I have to specify it when running the `bootstrap` command and also have it defined in the code via `qualifier` property on the `DefaultStackSynthesizer`. Not ideal
 
-WIP
+- The S3 events are sent to the _default_ EventBridge bus.

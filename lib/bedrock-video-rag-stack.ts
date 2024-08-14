@@ -11,7 +11,7 @@ export class BedrockVideoRagStack extends cdk.Stack {
 
     const mediaStateMachine = new MediaStateMachine(this);
 
-    const mediaBus = new MediaBus(this, mediaBucket, mediaStateMachine);
+    const mediaBusRule = new MediaBusRule(this, mediaBucket, mediaStateMachine);
   }
 }
 
@@ -27,35 +27,61 @@ class MediaBucket extends cdk.aws_s3.Bucket {
   }
 }
 
-class MediaBus extends cdk.aws_events.EventBus {
+class MediaBusRule extends cdk.aws_events.Rule {
   constructor(scope: Construct, bucket: IBucket, stateMachine: IStateMachine) {
-    super(scope, "MediaBus");
-
-    const fileUploadedRule = new cdk.aws_events.Rule(this, "FileUploadedRule", {
+    super(scope, "MediaBusRule", {
       enabled: true,
-      /**
-       * TODO: use the default bus here.
-       */
-      eventBus: this,
       eventPattern: {
         source: ["aws.s3"],
         detailType: ["Object Created"],
         detail: {
           bucket: {
             name: [bucket.bucketName]
+          },
+          object: {
+            key: [{ suffix: ".mp4" }]
           }
         }
       }
     });
 
-    fileUploadedRule.addTarget(
-      new cdk.aws_events_targets.SfnStateMachine(stateMachine)
+    this.addTarget(
+      new cdk.aws_events_targets.SfnStateMachine(stateMachine, {
+        input: cdk.aws_events.RuleTargetInput.fromObject({
+          bucketName: cdk.aws_events.EventField.fromPath(
+            "$.detail.bucket.name"
+          ),
+          objectKey: cdk.aws_events.EventField.fromPath("$.detail.object.key")
+        })
+      })
     );
   }
 }
 
 class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
   constructor(scope: Construct) {
+    const startTranscriptionTask =
+      new cdk.aws_stepfunctions_tasks.CallAwsService(
+        scope,
+        "StartTranscriptionTask",
+        {
+          service: "transcribe",
+          action: "startTranscriptionJob",
+          iamResources: ["*"],
+          parameters: {
+            Media: {
+              MediaFileUri: cdk.aws_stepfunctions.JsonPath.format(
+                "s3://{}/{}",
+                cdk.aws_stepfunctions.JsonPath.stringAt("$.bucketName"),
+                cdk.aws_stepfunctions.JsonPath.stringAt("$.objectKey")
+              )
+            },
+            "TranscriptionJobName.$": "$$.Execution.Name",
+            LanguageCode: "en-US"
+          }
+        }
+      );
+
     const passStep = new cdk.aws_stepfunctions.Pass(scope, "Pass");
 
     super(scope, "MediaStateMachine", {
