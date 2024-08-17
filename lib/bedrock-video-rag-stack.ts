@@ -9,9 +9,51 @@ export class BedrockVideoRagStack extends cdk.Stack {
 
     const mediaBucket = new MediaBucket(this);
 
-    const mediaStateMachine = new MediaStateMachine(this, mediaBucket);
+    const transcriptionsBucket = new TranscriptionsBucket(this);
 
-    const mediaBusRule = new MediaBusRule(this, mediaBucket, mediaStateMachine);
+    const mediaStateMachine = new MediaStateMachine(this, {
+      mediaBucket,
+      transcriptionsBucket
+    });
+
+    const mediaBusRule = new MediaBusRule(this, {
+      mediaBucket,
+      mediaStateMachine
+    });
+
+    // new cdk.aws_glue.CfnDatabase(this, "TranscriptionsDatabase", {
+
+    // })
+  }
+}
+
+/**
+ * https://github.com/WojciechMatuszewski/serverless-video-transcribe-fun/blob/main/lib/serverless-transcribe-stack.ts#L303
+ */
+class TranscriptionsGlueDatabase extends cdk.aws_glue.CfnDatabase {
+  constructor(scope: Construct) {
+    super(scope, "TranscriptionsDatabase", {
+      catalogId: cdk.Stack.of(scope).account,
+      databaseInput: {}
+    });
+  }
+}
+
+class TranscriptionsGlueTable extends cdk.aws_glue.CfnTable {
+  constructor(
+    scope: Construct,
+    {
+      TranscriptionsGlueDatabase
+    }: { TranscriptionsGlueDatabase: cdk.aws_glue.CfnDatabase }
+  ) {
+    super(scope, "TranscriptionsTable", {
+      catalogId: TranscriptionsGlueDatabase.catalogId,
+      databaseName: "",
+      tableInput: {
+        name: "TranscriptionsTable",
+        parameters: {}
+      }
+    });
   }
 }
 
@@ -27,10 +69,25 @@ class MediaBucket extends cdk.aws_s3.Bucket {
   }
 }
 
-class TranscriptionBucket extends cdk.aws_s3.Bucket {}
+class TranscriptionsBucket extends cdk.aws_s3.Bucket {
+  constructor(scope: Construct) {
+    super(scope, "TranscriptionsBucket", {
+      autoDeleteObjects: true,
+      publicReadAccess: false,
+      blockPublicAccess: cdk.aws_s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+  }
+}
 
 class MediaBusRule extends cdk.aws_events.Rule {
-  constructor(scope: Construct, bucket: IBucket, stateMachine: IStateMachine) {
+  constructor(
+    scope: Construct,
+    {
+      mediaBucket,
+      mediaStateMachine
+    }: { mediaBucket: IBucket; mediaStateMachine: IStateMachine }
+  ) {
     super(scope, "MediaBusRule", {
       enabled: true,
       eventPattern: {
@@ -38,7 +95,7 @@ class MediaBusRule extends cdk.aws_events.Rule {
         detailType: ["Object Created"],
         detail: {
           bucket: {
-            name: [bucket.bucketName]
+            name: [mediaBucket.bucketName]
           },
           object: {
             key: [{ suffix: ".mp4" }, { suffix: ".m4a" }]
@@ -48,7 +105,7 @@ class MediaBusRule extends cdk.aws_events.Rule {
     });
 
     this.addTarget(
-      new cdk.aws_events_targets.SfnStateMachine(stateMachine, {
+      new cdk.aws_events_targets.SfnStateMachine(mediaStateMachine, {
         input: cdk.aws_events.RuleTargetInput.fromObject({
           bucketName: cdk.aws_events.EventField.fromPath(
             "$.detail.bucket.name"
@@ -61,10 +118,20 @@ class MediaBusRule extends cdk.aws_events.Rule {
 }
 
 class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
-  constructor(scope: Construct, mediaBucket: IBucket) {
+  constructor(
+    scope: Construct,
+    {
+      mediaBucket,
+      transcriptionsBucket
+    }: { mediaBucket: IBucket; transcriptionsBucket: IBucket }
+  ) {
     const readMediaBucketPolicy = new cdk.aws_iam.PolicyStatement({
       actions: ["s3:GetObject"],
       resources: [mediaBucket.arnForObjects("*")]
+    });
+    const putTranscriptionsBucketPolicy = new cdk.aws_iam.PolicyStatement({
+      actions: ["s3:PutObject"],
+      resources: [transcriptionsBucket.arnForObjects("*")]
     });
 
     const startTranscriptionTask =
@@ -85,9 +152,18 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
             },
             TranscriptionJobName:
               cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name"),
-            LanguageCode: "en-US"
+            LanguageCode: "en-US",
+            OutputBucketName: transcriptionsBucket.bucketName,
+            OutputKey: cdk.aws_stepfunctions.JsonPath.format(
+              "{}/{}.json",
+              "transcriptions",
+              cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name")
+            )
           },
-          additionalIamStatements: [readMediaBucketPolicy],
+          additionalIamStatements: [
+            readMediaBucketPolicy,
+            putTranscriptionsBucketPolicy
+          ],
           resultSelector: {
             jobName: cdk.aws_stepfunctions.JsonPath.stringAt(
               "$.TranscriptionJob.TranscriptionJobName"

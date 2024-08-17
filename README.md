@@ -11,3 +11,13 @@
     - I have to specify it when running the `bootstrap` command and also have it defined in the code via `qualifier` property on the `DefaultStackSynthesizer`. Not ideal
 
 - The S3 events are sent to the _default_ EventBridge bus.
+
+- Transforming S3 files and saving them to a new location is surprisingly involved.
+
+  - You can use AWS Athena in conjunction with AWS Glue.
+
+    - First, you have to create a database in AWS Glue.
+
+    - Then, you can use that database to query the S3 via AWS Athena.
+
+    - By default, AWS Athena will save the query results in `.csv` format. You can change the format [via the `UNLOAD` statement].
