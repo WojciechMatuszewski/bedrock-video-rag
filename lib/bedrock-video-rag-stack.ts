@@ -9,7 +9,7 @@ export class BedrockVideoRagStack extends cdk.Stack {
 
     const mediaBucket = new MediaBucket(this);
 
-    const mediaStateMachine = new MediaStateMachine(this);
+    const mediaStateMachine = new MediaStateMachine(this, mediaBucket);
 
     const mediaBusRule = new MediaBusRule(this, mediaBucket, mediaStateMachine);
   }
@@ -27,6 +27,8 @@ class MediaBucket extends cdk.aws_s3.Bucket {
   }
 }
 
+class TranscriptionBucket extends cdk.aws_s3.Bucket {}
+
 class MediaBusRule extends cdk.aws_events.Rule {
   constructor(scope: Construct, bucket: IBucket, stateMachine: IStateMachine) {
     super(scope, "MediaBusRule", {
@@ -39,7 +41,7 @@ class MediaBusRule extends cdk.aws_events.Rule {
             name: [bucket.bucketName]
           },
           object: {
-            key: [{ suffix: ".mp4" }]
+            key: [{ suffix: ".mp4" }, { suffix: ".m4a" }]
           }
         }
       }
@@ -59,7 +61,12 @@ class MediaBusRule extends cdk.aws_events.Rule {
 }
 
 class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
-  constructor(scope: Construct) {
+  constructor(scope: Construct, mediaBucket: IBucket) {
+    const readMediaBucketPolicy = new cdk.aws_iam.PolicyStatement({
+      actions: ["s3:GetObject"],
+      resources: [mediaBucket.arnForObjects("*")]
+    });
+
     const startTranscriptionTask =
       new cdk.aws_stepfunctions_tasks.CallAwsService(
         scope,
@@ -76,17 +83,93 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
                 cdk.aws_stepfunctions.JsonPath.stringAt("$.objectKey")
               )
             },
-            "TranscriptionJobName.$": "$$.Execution.Name",
+            TranscriptionJobName:
+              cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name"),
             LanguageCode: "en-US"
+          },
+          additionalIamStatements: [readMediaBucketPolicy],
+          resultSelector: {
+            jobName: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.TranscriptionJob.TranscriptionJobName"
+            ),
+            status: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.TranscriptionJob.TranscriptionJobStatus"
+            )
           }
         }
       );
 
-    const passStep = new cdk.aws_stepfunctions.Pass(scope, "Pass");
+    const checkTranscriptionStatusTask =
+      new cdk.aws_stepfunctions_tasks.CallAwsService(
+        scope,
+        "CheckTranscriptionStatusTask",
+        {
+          service: "transcribe",
+          action: "getTranscriptionJob",
+          iamResources: ["*"],
+          parameters: {
+            TranscriptionJobName:
+              cdk.aws_stepfunctions.JsonPath.stringAt("$.jobName")
+          },
+          resultSelector: {
+            status: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.TranscriptionJob.TranscriptionJobStatus"
+            ),
+            jobName: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.TranscriptionJob.TranscriptionJobName"
+            ),
+            transcriptUri: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.TranscriptionJob.Transcript.TranscriptFileUri"
+            )
+          }
+        }
+      );
+
+    const decideOnTranscriptionStatus = new cdk.aws_stepfunctions.Choice(
+      scope,
+      "DecideOnTranscriptionStatus"
+    );
+
+    decideOnTranscriptionStatus.when(
+      cdk.aws_stepfunctions.Condition.stringEquals("$.status", "COMPLETED"),
+      new cdk.aws_stepfunctions.Pass(scope, "TranscriptionCompleted")
+    );
+
+    decideOnTranscriptionStatus.when(
+      cdk.aws_stepfunctions.Condition.stringEquals("$.status", "FAILED"),
+      new cdk.aws_stepfunctions.Pass(scope, "TranscriptionFailed")
+    );
+
+    const waitFor10SecondsTask = new cdk.aws_stepfunctions.Wait(
+      scope,
+      "WaitFor10Seconds",
+      {
+        time: cdk.aws_stepfunctions.WaitTime.duration(cdk.Duration.seconds(10))
+      }
+    );
+
+    const transcriptionStatusWaiter = waitFor10SecondsTask
+      .next(checkTranscriptionStatusTask)
+      .next(decideOnTranscriptionStatus);
+
+    decideOnTranscriptionStatus.otherwise(transcriptionStatusWaiter);
+
+    // const initialWaitFor10Seconds = new cdk.aws_stepfunctions.Wait(
+    //   scope,
+    //   "InitialWaitFor10Seconds",
+    //   {
+    //     time: cdk.aws_stepfunctions.WaitTime.duration(cdk.Duration.seconds(10))
+    //   }
+    // );
+
+    // waitForTranscriptionTask.otherwise(waitFor10SecondsTask);
+
+    const body = cdk.aws_stepfunctions.DefinitionBody.fromChainable(
+      startTranscriptionTask.next(transcriptionStatusWaiter)
+    );
 
     super(scope, "MediaStateMachine", {
-      definitionBody:
-        cdk.aws_stepfunctions.DefinitionBody.fromChainable(passStep)
+      definitionBody: body
     });
   }
 }
