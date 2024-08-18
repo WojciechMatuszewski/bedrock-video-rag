@@ -1,8 +1,10 @@
+import "dotenv/config";
 import * as cdk from "aws-cdk-lib";
 import * as glue from "@aws-cdk/aws-glue-alpha";
 import { IBucket } from "aws-cdk-lib/aws-s3";
 import { IStateMachine } from "aws-cdk-lib/aws-stepfunctions";
 import { Construct } from "constructs";
+import * as genai from "@cdklabs/generative-ai-cdk-constructs";
 
 export class BedrockVideoRagStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -16,6 +18,13 @@ export class BedrockVideoRagStack extends cdk.Stack {
 
     const transcriptionsGlueTable = new TranscriptionsGlueTable(this, {
       glueDatabase: transcriptionsGlueDatabase,
+      transcriptionsBucket
+    });
+
+    const bedrockKnowledgeBase = new BedrockKnowledgeBase(this);
+
+    const bedrockDataStore = new BedrockDataStore(this, {
+      knowledgeBase: bedrockKnowledgeBase,
       transcriptionsBucket
     });
 
@@ -35,6 +44,41 @@ export class BedrockVideoRagStack extends cdk.Stack {
 /**
  * https://github.com/WojciechMatuszewski/serverless-video-transcribe-fun/blob/main/lib/serverless-transcribe-stack.ts#L303
  */
+
+class BedrockKnowledgeBase extends genai.bedrock.KnowledgeBase {
+  constructor(scope: Construct) {
+    const pineconeVectorStore = new genai.pinecone.PineconeVectorStore({
+      connectionString: process.env.PINECONE_CONNECTION_STRING as string,
+      credentialsSecretArn: process.env.PINECONE_API_KEY_ARN as string,
+      metadataField: "metadata",
+      textField: "text"
+    });
+
+    super(scope, "BedrockKnowledgeBase", {
+      embeddingsModel: genai.bedrock.BedrockFoundationModel.TITAN_EMBED_TEXT_V1,
+      vectorStore: pineconeVectorStore
+    });
+  }
+}
+
+class BedrockDataStore extends genai.bedrock.S3DataSource {
+  constructor(
+    scope: Construct,
+    {
+      transcriptionsBucket,
+      knowledgeBase
+    }: {
+      transcriptionsBucket: IBucket;
+      knowledgeBase: genai.bedrock.KnowledgeBase;
+    }
+  ) {
+    super(scope, "BedrockDataStore", {
+      bucket: transcriptionsBucket,
+      dataSourceName: "transcriptions",
+      knowledgeBase
+    });
+  }
+}
 
 class TranscriptionsGlueDatabase extends glue.Database {
   constructor(scope: Construct) {

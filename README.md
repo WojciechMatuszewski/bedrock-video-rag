@@ -49,3 +49,13 @@
 - **I had issues querying _formatted_ `.json` files in AWS Athena**.
 
   - Athena complained that the file is malformed, but it was valid JSON, just with extra whitespace (formatted via `Prettier`).
+
+- The Amazon Bedrock service is still unavailable for Ireland region. Interesting that it takes Amazon so long to enable this service for most regions.
+
+- **When building the Amazon Bedrock knowledge base** the _format_ of the **value held in the secrets manager for the Pinecone API key needed to be `apiKey: VALUE`**.
+
+  - I wonder why such constraint. Why not accept the _value_ of the secret as the _apiKey_?
+
+- When syncing the knowledge base, **I was hitting errors saying that the _vector database encountered an error_**
+
+  - It turns out, **there was a mismatch between the _dimensions_ setting I had in Pinecone and Bedrock**!
