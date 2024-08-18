@@ -21,3 +21,31 @@
     - Then, you can use that database to query the S3 via AWS Athena.
 
     - By default, AWS Athena will save the query results in `.csv` format. You can change the format [via the `UNLOAD` statement].
+
+- **You can extract and save AWS Athena query results to another S3 bucket**.
+
+  - I came up with the following query for getting `transcript` property from `transcriptions` array.
+
+    ```sql
+    UNLOAD(
+      select
+          array_join(array_agg(transcriptItem.transcript), '') as fullTranscription
+      from
+          transcriptions
+      CROSS JOIN UNNEST(results.transcripts) as t(transcriptItem)
+    )
+    TO 'your bucket here'
+    with (format = 'TEXTFILE', compression = 'NONE')
+    ```
+
+    Notice that I can even specify the format in which to save the results. Pretty neat!
+
+- While working on similar workflow a while back, [I was executing the AWS Athena query directly](https://github.com/WojciechMatuszewski/serverless-video-transcribe-fun/blob/main/lib/serverless-transcribe-stack.ts#L343).
+
+  - I found a blog post where [they create a _"Prepared statement"_](https://aws.amazon.com/blogs/compute/building-a-low-code-speech-you-know-counter-using-aws-step-functions/) first, then execute it in the context of a workgroup.
+
+    - Here [is the link to the code this blog post is based on](https://github.com/aws-samples/aws-stepfunctions-examples/blob/main/sam/app-low-code-you-know-counter/template.yaml#L245).
+
+- **I had issues querying _formatted_ `.json` files in AWS Athena**.
+
+  - Athena complained that the file is malformed, but it was valid JSON, just with extra whitespace (formatted via `Prettier`).
