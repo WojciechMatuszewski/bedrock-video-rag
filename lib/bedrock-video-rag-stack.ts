@@ -23,7 +23,7 @@ export class BedrockVideoRagStack extends cdk.Stack {
 
     const bedrockKnowledgeBase = new BedrockKnowledgeBase(this);
 
-    const bedrockDataStore = new BedrockDataStore(this, {
+    const bedrockDataSource = new BedrockDataSource(this, {
       knowledgeBase: bedrockKnowledgeBase,
       transcriptionsBucket
     });
@@ -31,7 +31,8 @@ export class BedrockVideoRagStack extends cdk.Stack {
     const mediaStateMachine = new MediaStateMachine(this, {
       mediaBucket,
       transcriptionsBucket,
-      transcriptionsGlueDatabase
+      bedrockDataSource,
+      bedrockKnowledgeBase
     });
 
     const mediaBusRule = new MediaBusRule(this, {
@@ -40,10 +41,6 @@ export class BedrockVideoRagStack extends cdk.Stack {
     });
   }
 }
-
-/**
- * https://github.com/WojciechMatuszewski/serverless-video-transcribe-fun/blob/main/lib/serverless-transcribe-stack.ts#L303
- */
 
 class BedrockKnowledgeBase extends genai.bedrock.KnowledgeBase {
   constructor(scope: Construct) {
@@ -61,7 +58,7 @@ class BedrockKnowledgeBase extends genai.bedrock.KnowledgeBase {
   }
 }
 
-class BedrockDataStore extends genai.bedrock.S3DataSource {
+class BedrockDataSource extends genai.bedrock.S3DataSource {
   constructor(
     scope: Construct,
     {
@@ -75,7 +72,8 @@ class BedrockDataStore extends genai.bedrock.S3DataSource {
     super(scope, "BedrockDataStore", {
       bucket: transcriptionsBucket,
       dataSourceName: "transcriptions",
-      knowledgeBase
+      knowledgeBase,
+      inclusionPrefixes: ["data/"]
     });
   }
 }
@@ -194,11 +192,13 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
     {
       mediaBucket,
       transcriptionsBucket,
-      transcriptionsGlueDatabase
+      bedrockDataSource,
+      bedrockKnowledgeBase
     }: {
       mediaBucket: IBucket;
       transcriptionsBucket: IBucket;
-      transcriptionsGlueDatabase: glue.Database;
+      bedrockDataSource: genai.bedrock.S3DataSource;
+      bedrockKnowledgeBase: genai.bedrock.KnowledgeBase;
     }
   ) {
     const readMediaBucketPolicy = new cdk.aws_iam.PolicyStatement({
@@ -312,6 +312,35 @@ with (format = 'TEXTFILE', compression = 'NONE')
         }
       );
 
+    const startIngestionJobPolicy = new cdk.aws_iam.PolicyStatement({
+      actions: ["bedrock:StartIngestionJob"],
+      resources: [bedrockKnowledgeBase.knowledgeBaseArn]
+    });
+    const associateThirdPartyKnowledgeBasePolicy =
+      new cdk.aws_iam.PolicyStatement({
+        actions: ["bedrock:AssociateThirdPartyKnowledgeBase"],
+        resources: [bedrockKnowledgeBase.knowledgeBaseArn]
+      });
+
+    const syncBedrockDataSourceTask =
+      new cdk.aws_stepfunctions_tasks.CallAwsService(
+        scope,
+        "SyncBedrockDataSourceTask",
+        {
+          service: "bedrockagent",
+          action: "startIngestionJob",
+          parameters: {
+            DataSourceId: bedrockDataSource.dataSourceId,
+            KnowledgeBaseId: bedrockKnowledgeBase.knowledgeBaseId
+          },
+          iamResources: ["*"],
+          additionalIamStatements: [
+            startIngestionJobPolicy,
+            associateThirdPartyKnowledgeBasePolicy
+          ]
+        }
+      );
+
     const decideOnTranscriptionStatus = new cdk.aws_stepfunctions.Choice(
       scope,
       "DecideOnTranscriptionStatus"
@@ -319,7 +348,7 @@ with (format = 'TEXTFILE', compression = 'NONE')
 
     decideOnTranscriptionStatus.when(
       cdk.aws_stepfunctions.Condition.stringEquals("$.status", "COMPLETED"),
-      executeAthenaQueryTask
+      executeAthenaQueryTask.next(syncBedrockDataSourceTask)
     );
 
     decideOnTranscriptionStatus.when(
@@ -348,12 +377,11 @@ with (format = 'TEXTFILE', compression = 'NONE')
     super(scope, "MediaStateMachine", {
       definitionBody: body
     });
-
-    // this.addToRolePolicy(
-    //   new cdk.aws_iam.PolicyStatement({
-    //     actions: ["glue:GetTable", "glue:GetPartitions"],
-    //     resources: [transcriptionsGlueDatabase.databaseArn]
-    //   })
-    // );
   }
 }
+
+/**
+ * 1. Invoke the Amazon Bedrock for chat. See the console how to do it.
+ * 2. Consider adding metadata to the files? This should allow us to use -> https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_RetrievalFilter.html ??
+ *  - We could use `source` to point the agent to specific file. See Pinecone console?
+ */
