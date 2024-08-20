@@ -322,10 +322,10 @@ with (format = 'TEXTFILE', compression = 'NONE')
         resources: [bedrockKnowledgeBase.knowledgeBaseArn]
       });
 
-    const syncBedrockDataSourceTask =
+    const startBedrockDataIngestionTask =
       new cdk.aws_stepfunctions_tasks.CallAwsService(
         scope,
-        "SyncBedrockDataSourceTask",
+        "StartBedrockDataIngestionTask",
         {
           service: "bedrockagent",
           action: "startIngestionJob",
@@ -337,9 +337,100 @@ with (format = 'TEXTFILE', compression = 'NONE')
           additionalIamStatements: [
             startIngestionJobPolicy,
             associateThirdPartyKnowledgeBasePolicy
-          ]
+          ],
+          resultSelector: {
+            jobId: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.IngestionJob.IngestionJobId"
+            ),
+            status: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.IngestionJob.Status"
+            )
+          }
         }
       );
+
+    const getIngestionJobPolicy = new cdk.aws_iam.PolicyStatement({
+      actions: ["bedrock:GetIngestionJob"],
+      resources: [bedrockKnowledgeBase.knowledgeBaseArn]
+    });
+
+    const checkBedrockDataIngestionTask =
+      new cdk.aws_stepfunctions_tasks.CallAwsService(
+        scope,
+        "CheckBedrockDataIngestionTask",
+        {
+          service: "bedrockagent",
+          action: "getIngestionJob",
+          parameters: {
+            DataSourceId: bedrockDataSource.dataSourceId,
+            KnowledgeBaseId: bedrockKnowledgeBase.knowledgeBaseId,
+            IngestionJobId: cdk.aws_stepfunctions.JsonPath.stringAt("$.jobId")
+          },
+          iamResources: ["*"],
+          additionalIamStatements: [getIngestionJobPolicy],
+          resultSelector: {
+            status: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.IngestionJob.Status"
+            ),
+            jobId: cdk.aws_stepfunctions.JsonPath.stringAt(
+              "$.IngestionJob.IngestionJobId"
+            )
+          }
+        }
+      );
+
+    const bedrockIngestionSuccessful = new cdk.aws_stepfunctions.Pass(
+      scope,
+      "BedrockIngestionSuccessful"
+    );
+
+    const bedrockIngestionFailed = new cdk.aws_stepfunctions.Pass(
+      scope,
+      "BedrockIngestionFailed"
+    );
+
+    const decideOnBedrockIngestionStatus = new cdk.aws_stepfunctions.Choice(
+      scope,
+      "DecideOnBedrockIngestionStatus"
+    );
+
+    decideOnBedrockIngestionStatus.when(
+      /**
+       * Notice that it is different than the status we get from AWS Transcribe.
+       */
+      cdk.aws_stepfunctions.Condition.stringEquals("$.status", "COMPLETE"),
+      bedrockIngestionSuccessful
+    );
+
+    decideOnBedrockIngestionStatus.when(
+      cdk.aws_stepfunctions.Condition.stringEquals("$.status", "FAILED"),
+      bedrockIngestionFailed
+    );
+
+    const ingestionStatusWaitFor10Seconds = new cdk.aws_stepfunctions.Wait(
+      scope,
+      "IngestionStatusWaitFor10Seconds",
+      {
+        time: cdk.aws_stepfunctions.WaitTime.duration(cdk.Duration.seconds(10))
+      }
+    );
+
+    const handleBedrockIngestion = ingestionStatusWaitFor10Seconds
+      .next(checkBedrockDataIngestionTask)
+      .next(decideOnBedrockIngestionStatus);
+
+    decideOnBedrockIngestionStatus.otherwise(handleBedrockIngestion);
+
+    // ----
+
+    const transcriptionSuccessful = executeAthenaQueryTask.next(
+      startBedrockDataIngestionTask.next(handleBedrockIngestion)
+    );
+
+    const transcriptionFailed = new cdk.aws_stepfunctions.Pass(
+      scope,
+      "TranscriptionFailed"
+    );
 
     const decideOnTranscriptionStatus = new cdk.aws_stepfunctions.Choice(
       scope,
@@ -348,30 +439,30 @@ with (format = 'TEXTFILE', compression = 'NONE')
 
     decideOnTranscriptionStatus.when(
       cdk.aws_stepfunctions.Condition.stringEquals("$.status", "COMPLETED"),
-      executeAthenaQueryTask.next(syncBedrockDataSourceTask)
+      transcriptionSuccessful
     );
 
     decideOnTranscriptionStatus.when(
       cdk.aws_stepfunctions.Condition.stringEquals("$.status", "FAILED"),
-      new cdk.aws_stepfunctions.Pass(scope, "TranscriptionFailed")
+      transcriptionFailed
     );
 
-    const waitFor10SecondsTask = new cdk.aws_stepfunctions.Wait(
+    const transcriptionStatusWaitFor10Seconds = new cdk.aws_stepfunctions.Wait(
       scope,
-      "WaitFor10Seconds",
+      "TranscriptionStatusWaitFor10Seconds",
       {
         time: cdk.aws_stepfunctions.WaitTime.duration(cdk.Duration.seconds(10))
       }
     );
 
-    const transcriptionStatusWaiter = waitFor10SecondsTask
+    const handleTranscription = transcriptionStatusWaitFor10Seconds
       .next(checkTranscriptionStatusTask)
       .next(decideOnTranscriptionStatus);
 
-    decideOnTranscriptionStatus.otherwise(transcriptionStatusWaiter);
+    decideOnTranscriptionStatus.otherwise(handleTranscription);
 
     const body = cdk.aws_stepfunctions.DefinitionBody.fromChainable(
-      startTranscriptionTask.next(transcriptionStatusWaiter)
+      startTranscriptionTask.next(handleTranscription)
     );
 
     super(scope, "MediaStateMachine", {

@@ -59,3 +59,11 @@
 - When syncing the knowledge base, **I was hitting errors saying that the _vector database encountered an error_**
 
   - It turns out, **there was a mismatch between the _dimensions_ setting I had in Pinecone and Bedrock**!
+
+- When chatting with the knowledge base, you can use [_RetrievalFilters_](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_RetrievalFilter.html) on the metadata to **scope down the answers to be backed by specific asset in the knowledge base**.
+
+- The `.sync` tasks in _Step Functions_ are really useful.
+
+  - If the service you are using does not support those, you have to build "waiter loops" which is not that fun.
+
+  - **Imagine if we could "pause" the state machine and wait for some _EventBridge_ event to happen**. That would be so awesome.
