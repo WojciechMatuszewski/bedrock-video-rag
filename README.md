@@ -40,6 +40,10 @@
 
     Notice that I can even specify the format in which to save the results. Pretty neat!
 
+    **After doing some research, I came to the conclusion that it is impossible to rename the name of the output file**. I can specify the s3 location, but I can't do anything about the filename. That sucks, as I need to create the `FILENAME.metadata.json` file for Amazon Bedrock to scope query results via filters.
+
+    **It looks like I will need to use AWS Lambda Function** to create the metadata file and to extract the transcripts from the AWS Transcribe results.
+
 - While working on similar workflow a while back, [I was executing the AWS Athena query directly](https://github.com/WojciechMatuszewski/serverless-video-transcribe-fun/blob/main/lib/serverless-transcribe-stack.ts#L343).
 
   - I found a blog post where [they create a _"Prepared statement"_](https://aws.amazon.com/blogs/compute/building-a-low-code-speech-you-know-counter-using-aws-step-functions/) first, then execute it in the context of a workgroup.
@@ -67,3 +71,11 @@
   - If the service you are using does not support those, you have to build "waiter loops" which is not that fun.
 
   - **Imagine if we could "pause" the state machine and wait for some _EventBridge_ event to happen**. That would be so awesome.
+
+- I got a bit confused when it comes to the `.metadata.json` file and filtering.
+
+  - At first, I though that I can specify the filtering based on the values I see in Pinecone console. But doing so, did not work – the bot could not retrieve the right information.
+
+  - **[This great blog post](https://aws.amazon.com/blogs/machine-learning/knowledge-bases-for-amazon-bedrock-now-supports-metadata-filtering-to-improve-retrieval-accuracy/) cleared a lot of things for me**.
+
+    - One has to use `XXX.metadata.json` file with certain format alongside the "data" file.

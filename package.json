@@ -7,7 +7,8 @@
   },
   "scripts": {
     "bootstrap": "cdk bootstrap --qualifier bedrockrag --toolkit-stack-name BedrockVideoRagBootstrap",
-    "deploy": "cdk deploy --hotswap-fallback --no-rollback --require-approval never"
+    "deploy": "cdk deploy --hotswap-fallback --no-rollback --require-approval never",
+    "tsx": "tsx"
   },
   "devDependencies": {
     "@aws-cdk/aws-glue-alpha": "2.152.0-alpha.0",
