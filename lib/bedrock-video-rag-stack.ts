@@ -5,6 +5,7 @@ import { IBucket } from "aws-cdk-lib/aws-s3";
 import { IStateMachine } from "aws-cdk-lib/aws-stepfunctions";
 import { Construct } from "constructs";
 import * as genai from "@cdklabs/generative-ai-cdk-constructs";
+import { ITable } from "aws-cdk-lib/aws-dynamodb";
 
 export class BedrockVideoRagStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -14,9 +15,11 @@ export class BedrockVideoRagStack extends cdk.Stack {
 
     const transcriptionsBucket = new TranscriptionsBucket(this);
 
+    const transcriptionsTable = new TranscriptionsTable(this);
+
     const transcriptionsGlueDatabase = new TranscriptionsGlueDatabase(this);
 
-    const transcriptionsGlueTable = new TranscriptionsGlueTable(this, {
+    new TranscriptionsGlueTable(this, {
       glueDatabase: transcriptionsGlueDatabase,
       transcriptionsBucket
     });
@@ -31,6 +34,7 @@ export class BedrockVideoRagStack extends cdk.Stack {
     const mediaStateMachine = new MediaStateMachine(this, {
       mediaBucket,
       transcriptionsBucket,
+      transcriptionsTable,
       bedrockDataSource,
       bedrockKnowledgeBase
     });
@@ -38,6 +42,24 @@ export class BedrockVideoRagStack extends cdk.Stack {
     const mediaBusRule = new MediaBusRule(this, {
       mediaBucket,
       mediaStateMachine
+    });
+  }
+}
+
+class TranscriptionsTable extends cdk.aws_dynamodb.Table {
+  constructor(scope: Construct) {
+    super(scope, "TranscriptionsTable", {
+      partitionKey: {
+        name: "pk",
+        type: cdk.aws_dynamodb.AttributeType.STRING
+      },
+      sortKey: {
+        name: "sk",
+        type: cdk.aws_dynamodb.AttributeType.STRING
+      },
+      billingMode: cdk.aws_dynamodb.BillingMode.PAY_PER_REQUEST,
+      stream: cdk.aws_dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      deletionProtection: false
     });
   }
 }
@@ -94,7 +116,7 @@ class TranscriptionsGlueTable extends glue.S3Table {
       transcriptionsBucket
     }: { glueDatabase: glue.Database; transcriptionsBucket: IBucket }
   ) {
-    super(scope, "TranscriptionsTable", {
+    super(scope, "TranscriptionsGlueTable", {
       tableName: "transcriptions",
       database: glueDatabase,
       columns: [
@@ -192,11 +214,13 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
     {
       mediaBucket,
       transcriptionsBucket,
+      transcriptionsTable,
       bedrockDataSource,
       bedrockKnowledgeBase
     }: {
       mediaBucket: IBucket;
       transcriptionsBucket: IBucket;
+      transcriptionsTable: ITable;
       bedrockDataSource: genai.bedrock.S3DataSource;
       bedrockKnowledgeBase: genai.bedrock.KnowledgeBase;
     }
@@ -210,6 +234,32 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
       actions: ["s3:PutObject"],
       resources: [transcriptionsBucket.arnForObjects("*")]
     });
+
+    const saveItemInDynamoDBTask =
+      new cdk.aws_stepfunctions_tasks.DynamoPutItem(
+        scope,
+        "SaveItemInDynamoDBTask",
+        {
+          item: {
+            pk: cdk.aws_stepfunctions_tasks.DynamoAttributeValue.fromString(
+              "transcription"
+            ),
+            sk: cdk.aws_stepfunctions_tasks.DynamoAttributeValue.fromString(
+              cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name")
+            ),
+            bucketName:
+              cdk.aws_stepfunctions_tasks.DynamoAttributeValue.fromString(
+                cdk.aws_stepfunctions.JsonPath.stringAt("$.bucketName")
+              ),
+            fileName:
+              cdk.aws_stepfunctions_tasks.DynamoAttributeValue.fromString(
+                cdk.aws_stepfunctions.JsonPath.stringAt("$.objectKey")
+              )
+          },
+          table: transcriptionsTable,
+          outputPath: cdk.aws_stepfunctions.JsonPath.DISCARD
+        }
+      );
 
     const startTranscriptionTask =
       new cdk.aws_stepfunctions_tasks.CallAwsService(
@@ -252,6 +302,16 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
         }
       );
 
+    const kickoffTranscription = new cdk.aws_stepfunctions.Parallel(
+      scope,
+      "KickoffTranscription",
+      {
+        outputPath: cdk.aws_stepfunctions.JsonPath.stringAt("$[0]")
+      }
+    );
+    kickoffTranscription.branch(startTranscriptionTask);
+    kickoffTranscription.branch(saveItemInDynamoDBTask);
+
     const checkTranscriptionStatusTask =
       new cdk.aws_stepfunctions_tasks.CallAwsService(
         scope,
@@ -278,39 +338,48 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
         }
       );
 
-    const executeAthenaQueryTask =
-      new cdk.aws_stepfunctions_tasks.AthenaStartQueryExecution(
-        scope,
-        "ExecuteAthenaQueryTask",
-        {
-          integrationPattern: cdk.aws_stepfunctions.IntegrationPattern.RUN_JOB,
-          queryString: cdk.aws_stepfunctions.JsonPath.format(
-            `
-UNLOAD(
-  select
-      array_join(array_agg(transcriptItem.transcript), '') as fullTranscription
-  from
-      transcriptions
-  CROSS JOIN UNNEST(results.transcripts) as t(transcriptItem)
-  WHERE jobName = '{}'
-)
-TO '${transcriptionsBucket.s3UrlForObject("data/{}")}'
-with (format = 'TEXTFILE', compression = 'NONE')
-`,
-            cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name"),
-            cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name")
-          ),
-          queryExecutionContext: {
-            databaseName: "transcriptions"
-          },
-          resultConfiguration: {
-            outputLocation: {
-              bucketName: transcriptionsBucket.bucketName,
-              objectKey: "athena"
-            }
-          }
-        }
-      );
+    // const prepareDataForBedrockTask =
+    //   new cdk.aws_stepfunctions_tasks.LambdaInvoke(
+    //     scope,
+    //     "PrepareDataForBedrockTask",
+    //     {
+    //       lambdaFunction: ""
+    //     }
+    //   );
+
+    //     const executeAthenaQueryTask =
+    //       new cdk.aws_stepfunctions_tasks.AthenaStartQueryExecution(
+    //         scope,
+    //         "ExecuteAthenaQueryTask",
+    //         {
+    //           integrationPattern: cdk.aws_stepfunctions.IntegrationPattern.RUN_JOB,
+    //           queryString: cdk.aws_stepfunctions.JsonPath.format(
+    //             `
+    // UNLOAD(
+    //   select
+    //       array_join(array_agg(transcriptItem.transcript), '') as fullTranscription
+    //   from
+    //       transcriptions
+    //   CROSS JOIN UNNEST(results.transcripts) as t(transcriptItem)
+    //   WHERE jobName = '{}'
+    // )
+    // TO '${transcriptionsBucket.s3UrlForObject("data/{}")}'
+    // with (format = 'TEXTFILE', compression = 'NONE')
+    // `,
+    //             cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name"),
+    //             cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name")
+    //           ),
+    //           queryExecutionContext: {
+    //             databaseName: "transcriptions"
+    //           },
+    //           resultConfiguration: {
+    //             outputLocation: {
+    //               bucketName: transcriptionsBucket.bucketName,
+    //               objectKey: "athena"
+    //             }
+    //           }
+    //         }
+    //       );
 
     const startIngestionJobPolicy = new cdk.aws_iam.PolicyStatement({
       actions: ["bedrock:StartIngestionJob"],
@@ -462,7 +531,7 @@ with (format = 'TEXTFILE', compression = 'NONE')
     decideOnTranscriptionStatus.otherwise(handleTranscription);
 
     const body = cdk.aws_stepfunctions.DefinitionBody.fromChainable(
-      startTranscriptionTask.next(handleTranscription)
+      kickoffTranscription.next(handleTranscription)
     );
 
     super(scope, "MediaStateMachine", {

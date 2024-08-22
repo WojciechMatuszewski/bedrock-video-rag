@@ -44,6 +44,8 @@
 
     **It looks like I will need to use AWS Lambda Function** to create the metadata file and to extract the transcripts from the AWS Transcribe results.
 
+    **You can find the "Athena `UNLOAD` approach** on [this branch](https://github.com/WojciechMatuszewski/bedrock-video-rag/tree/athena-unload).
+
 - While working on similar workflow a while back, [I was executing the AWS Athena query directly](https://github.com/WojciechMatuszewski/serverless-video-transcribe-fun/blob/main/lib/serverless-transcribe-stack.ts#L343).
 
   - I found a blog post where [they create a _"Prepared statement"_](https://aws.amazon.com/blogs/compute/building-a-low-code-speech-you-know-counter-using-aws-step-functions/) first, then execute it in the context of a workgroup.
