@@ -81,3 +81,7 @@
   - **[This great blog post](https://aws.amazon.com/blogs/machine-learning/knowledge-bases-for-amazon-bedrock-now-supports-metadata-filtering-to-improve-retrieval-accuracy/) cleared a lot of things for me**.
 
     - One has to use `XXX.metadata.json` file with certain format alongside the "data" file.
+
+      - **The _prefix_ for the `.metadata.json` has to be the complete name of the file alongside the extension**.
+
+        - Keep in mind that the "data" file does not have to have an extension.

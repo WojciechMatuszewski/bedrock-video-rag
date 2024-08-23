@@ -6,6 +6,8 @@ import { IStateMachine } from "aws-cdk-lib/aws-stepfunctions";
 import { Construct } from "constructs";
 import * as genai from "@cdklabs/generative-ai-cdk-constructs";
 import { ITable } from "aws-cdk-lib/aws-dynamodb";
+import { IFunction } from "aws-cdk-lib/aws-lambda";
+import { dirname, join } from "desm";
 
 export class BedrockVideoRagStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -16,6 +18,8 @@ export class BedrockVideoRagStack extends cdk.Stack {
     const transcriptionsBucket = new TranscriptionsBucket(this);
 
     const transcriptionsTable = new TranscriptionsTable(this);
+
+    const parseTranscriptionFunction = new ParseTranscriptionFunction(this);
 
     const transcriptionsGlueDatabase = new TranscriptionsGlueDatabase(this);
 
@@ -35,6 +39,7 @@ export class BedrockVideoRagStack extends cdk.Stack {
       mediaBucket,
       transcriptionsBucket,
       transcriptionsTable,
+      parseTranscriptionFunction,
       bedrockDataSource,
       bedrockKnowledgeBase
     });
@@ -42,6 +47,54 @@ export class BedrockVideoRagStack extends cdk.Stack {
     const mediaBusRule = new MediaBusRule(this, {
       mediaBucket,
       mediaStateMachine
+    });
+  }
+}
+
+class ChatWithTranscriptAPI extends cdk.aws_apigatewayv2.HttpApi {
+  constructor(scope: Construct) {
+    super(scope, "ChatWithTranscriptAPI", {
+      corsPreflight: {
+        allowCredentials: true,
+        allowHeaders: ["*"],
+        allowMethods: [cdk.aws_apigatewayv2.CorsHttpMethod.ANY],
+        allowOrigins: ["*"]
+      }
+    });
+
+    const chatWithTranscriptHandler = new cdk.aws_lambda_nodejs.NodejsFunction(
+      this,
+      "ChatWithTranscriptHandler",
+      {}
+    );
+
+    this.addRoutes({
+      path: "transcript/{id}/chat",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.GET],
+      integration: new cdk.aws_apigatewayv2_integrations.HttpLambdaIntegration(
+        "ChatRouteHandler",
+        {},
+        {}
+      )
+    });
+  }
+}
+
+class ParseTranscriptionFunction extends cdk.aws_lambda_nodejs.NodejsFunction {
+  constructor(scope: Construct) {
+    super(scope, "ParseTranscriptionFunction", {
+      entry: join(
+        import.meta.url,
+        "../",
+        "functions",
+        "prepare-data-for-bedrock",
+        "handler.ts"
+      ),
+      handler: "handler",
+      environment: {},
+      architecture: cdk.aws_lambda.Architecture.ARM_64,
+      retryAttempts: 0,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X
     });
   }
 }
@@ -214,6 +267,7 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
     {
       mediaBucket,
       transcriptionsBucket,
+      parseTranscriptionFunction,
       transcriptionsTable,
       bedrockDataSource,
       bedrockKnowledgeBase
@@ -221,6 +275,7 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
       mediaBucket: IBucket;
       transcriptionsBucket: IBucket;
       transcriptionsTable: ITable;
+      parseTranscriptionFunction: IFunction;
       bedrockDataSource: genai.bedrock.S3DataSource;
       bedrockKnowledgeBase: genai.bedrock.KnowledgeBase;
     }
@@ -325,18 +380,31 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
               cdk.aws_stepfunctions.JsonPath.stringAt("$.jobName")
           },
           resultSelector: {
+            transcriptFileId:
+              cdk.aws_stepfunctions.JsonPath.stringAt("$$.Execution.Name"),
+            transcriptFilePath: cdk.aws_stepfunctions.JsonPath.format(
+              "transcriptions/{}.json",
+              cdk.aws_stepfunctions.JsonPath.stringAt(
+                "$.TranscriptionJob.TranscriptionJobName"
+              )
+            ),
+            bucketName: transcriptionsBucket.bucketName,
             status: cdk.aws_stepfunctions.JsonPath.stringAt(
               "$.TranscriptionJob.TranscriptionJobStatus"
-            ),
-            jobName: cdk.aws_stepfunctions.JsonPath.stringAt(
-              "$.TranscriptionJob.TranscriptionJobName"
-            ),
-            transcriptUri: cdk.aws_stepfunctions.JsonPath.stringAt(
-              "$.TranscriptionJob.Transcript.TranscriptFileUri"
             )
           }
         }
       );
+
+    transcriptionsBucket.grantReadWrite(parseTranscriptionFunction);
+    const parseTranscriptionTask = new cdk.aws_stepfunctions_tasks.LambdaInvoke(
+      scope,
+      "ParseTranscriptionTask",
+      {
+        lambdaFunction: parseTranscriptionFunction,
+        outputPath: cdk.aws_stepfunctions.JsonPath.DISCARD
+      }
+    );
 
     // const prepareDataForBedrockTask =
     //   new cdk.aws_stepfunctions_tasks.LambdaInvoke(
@@ -492,7 +560,7 @@ class MediaStateMachine extends cdk.aws_stepfunctions.StateMachine {
 
     // ----
 
-    const transcriptionSuccessful = executeAthenaQueryTask.next(
+    const transcriptionSuccessful = parseTranscriptionTask.next(
       startBedrockDataIngestionTask.next(handleBedrockIngestion)
     );
 
