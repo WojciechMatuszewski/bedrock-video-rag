@@ -85,3 +85,9 @@
       - **The _prefix_ for the `.metadata.json` has to be the complete name of the file alongside the extension**.
 
         - Keep in mind that the "data" file does not have to have an extension.
+
+- At first, I was importing `useFormState`. When using `useFormState`, for some reason, the `isPending` variable (third item in the array returned by the hook) was not defined.
+
+  - Now this hook is called `useActionState` **which is available on next@14.3.0-canary.46 and up**.
+
+    - The version I had initially installed did not support this hook despite typings showing it is there!
