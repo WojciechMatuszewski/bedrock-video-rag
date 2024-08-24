@@ -91,3 +91,11 @@
   - Now this hook is called `useActionState` **which is available on next@14.3.0-canary.46 and up**.
 
     - The version I had initially installed did not support this hook despite typings showing it is there!
+
+- I'm using the `RetrieveAndGenerate` API to retrieve answers from Bedrock. **I could not find a way to transform the response I get from SDK to a stream**.
+
+  - Is there an alternative API I could use that also supports filters applied to the `metadata.json` file?
+
+    - After spending some time on it, **I came to the conclusion that such API does not exist**.
+
+      - How am I supposed to scope the chat to a given file then?
