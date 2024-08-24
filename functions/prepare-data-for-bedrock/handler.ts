@@ -4,6 +4,7 @@ import {
   S3Client
 } from "@aws-sdk/client-s3";
 import { z } from "zod";
+import { JSONParserSchema } from "../lib/schema.ts";
 
 const s3Client = new S3Client({});
 
@@ -12,18 +13,6 @@ type Input = {
   transcriptFileId: string;
   bucketName: string;
 };
-
-const JSONParserSchema = z.string().transform((input, ctx) => {
-  try {
-    return JSON.parse(input);
-  } catch (error) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Input must be a valid JSON string"
-    });
-    return z.NEVER;
-  }
-});
 
 const TranscriptFileSchema = z.object({
   results: z.object({

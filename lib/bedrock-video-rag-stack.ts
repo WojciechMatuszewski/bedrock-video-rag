@@ -7,7 +7,7 @@ import { Construct } from "constructs";
 import * as genai from "@cdklabs/generative-ai-cdk-constructs";
 import { ITable } from "aws-cdk-lib/aws-dynamodb";
 import { IFunction } from "aws-cdk-lib/aws-lambda";
-import { dirname, join } from "desm";
+import { join } from "desm";
 
 export class BedrockVideoRagStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -48,35 +48,132 @@ export class BedrockVideoRagStack extends cdk.Stack {
       mediaBucket,
       mediaStateMachine
     });
+
+    const chatWithTranscriptFunction = new ChatWithTranscriptFunction(this, {
+      knowledgeBase: bedrockKnowledgeBase,
+      modelArn:
+        "arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-instant-v1"
+    });
+
+    const getTranscriptsFunction = new GetTranscriptsFunction(this, {
+      transcriptionsTable
+    });
+
+    const chatWithTranscriptAPI = new ChatWithTranscriptAPI(this, {
+      chatWithTranscriptFunction,
+      getTranscriptsFunction
+    });
   }
 }
 
 class ChatWithTranscriptAPI extends cdk.aws_apigatewayv2.HttpApi {
-  constructor(scope: Construct) {
+  constructor(
+    scope: Construct,
+    {
+      chatWithTranscriptFunction,
+      getTranscriptsFunction
+    }: {
+      chatWithTranscriptFunction: IFunction;
+      getTranscriptsFunction: IFunction;
+    }
+  ) {
     super(scope, "ChatWithTranscriptAPI", {
       corsPreflight: {
-        allowCredentials: true,
         allowHeaders: ["*"],
         allowMethods: [cdk.aws_apigatewayv2.CorsHttpMethod.ANY],
         allowOrigins: ["*"]
       }
     });
 
-    const chatWithTranscriptHandler = new cdk.aws_lambda_nodejs.NodejsFunction(
-      this,
-      "ChatWithTranscriptHandler",
-      {}
-    );
-
     this.addRoutes({
-      path: "transcript/{id}/chat",
-      methods: [cdk.aws_apigatewayv2.HttpMethod.GET],
+      path: "/transcript/{id}/chat",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.POST],
       integration: new cdk.aws_apigatewayv2_integrations.HttpLambdaIntegration(
         "ChatRouteHandler",
-        {},
-        {}
+        chatWithTranscriptFunction
       )
     });
+
+    this.addRoutes({
+      path: "/transcripts",
+      methods: [cdk.aws_apigatewayv2.HttpMethod.GET],
+      integration: new cdk.aws_apigatewayv2_integrations.HttpLambdaIntegration(
+        "TranscriptsRouteHandler",
+        getTranscriptsFunction
+      )
+    });
+  }
+}
+
+class ChatWithTranscriptFunction extends cdk.aws_lambda_nodejs.NodejsFunction {
+  constructor(
+    scope: Construct,
+    {
+      knowledgeBase,
+      modelArn
+    }: { knowledgeBase: genai.bedrock.KnowledgeBase; modelArn: string }
+  ) {
+    super(scope, "ChatWithTranscriptFunction", {
+      entry: join(
+        import.meta.url,
+        "../",
+        "functions",
+        "chat-with-transcript",
+        "handler.ts"
+      ),
+      handler: "handler",
+      environment: {
+        KNOWLEDGE_BASE_ID: knowledgeBase.knowledgeBaseId,
+        MODEL_ARN: modelArn
+      },
+      architecture: cdk.aws_lambda.Architecture.ARM_64,
+      retryAttempts: 0,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.seconds(30)
+    });
+
+    this.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        effect: cdk.aws_iam.Effect.ALLOW,
+        actions: ["bedrock:RetrieveAndGenerate", "bedrock:Retrieve"],
+        resources: [knowledgeBase.knowledgeBaseArn]
+      })
+    );
+
+    this.addToRolePolicy(
+      new cdk.aws_iam.PolicyStatement({
+        effect: cdk.aws_iam.Effect.ALLOW,
+        actions: ["bedrock:invokeModel"],
+        resources: [modelArn]
+      })
+    );
+  }
+}
+
+class GetTranscriptsFunction extends cdk.aws_lambda_nodejs.NodejsFunction {
+  constructor(
+    scope: Construct,
+    { transcriptionsTable }: { transcriptionsTable: ITable }
+  ) {
+    super(scope, "GetTranscriptsFunction", {
+      entry: join(
+        import.meta.url,
+        "../",
+        "functions",
+        "get-transcripts",
+        "handler.ts"
+      ),
+      handler: "handler",
+      architecture: cdk.aws_lambda.Architecture.ARM_64,
+      retryAttempts: 0,
+      runtime: cdk.aws_lambda.Runtime.NODEJS_20_X,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        TABLE_NAME: transcriptionsTable.tableName
+      }
+    });
+
+    transcriptionsTable.grantReadData(this);
   }
 }
 
