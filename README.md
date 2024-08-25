@@ -2,6 +2,36 @@
 
 > Based on [this blog post](https://levelup.gitconnected.com/using-rag-on-media-content-with-bedrock-knowledge-bases-and-amazon-transcribe-92abea166e68)
 
+## Architecture
+
+The main bulk of the logic is encapsulated inside a _State Machine_.
+
+![State Machine definition](./docs/sfn.png)
+
+Sadly I was **unable to encapsulate _all_ the logic there**.
+
+Creating the `.metadata.json` file is done via AWS Lambda (invoked as SFN task). The `.metadata.json` file is necessary to allow for `vectorSearchConfiguration.filter` usage (see `backend/functions/chat-with-transcript/handler.ts`).
+
+## Deployment
+
+1. Make sure AWS Bedrock is available in the region you want to deploy this application to.
+
+2. Install all dependencies via `pnpm install`.
+
+3. Create `.env` file in `backend` directory. See the `.env.example` for the necessary keys.
+
+4. Populate the `.env` file keys with the right values.
+
+5. Run bootstrap script `pnpm run bootstrap`.
+
+6. Run the deployment script `pnpm run deploy`.
+
+## Running the application
+
+You need to manually upload the files you wish to chat with via AWS console or the CLI. You want to upload files to the _media bucket_.
+
+1. Run the dev script `pnpm run dev`.
+
 ## Learnings
 
 - Using the `qualifier` option is a neat way to distinguish between different bootstraps for different stacks.

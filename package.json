@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "bootstrap": "cd backend && pnpm run bootstrap",
     "deploy": "cd backend && pnpm run deploy",
     "dev": "cd frontend && pnpm run dev"
   }
